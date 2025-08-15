@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from dataset import from_test_list          # 自己的数据集工具
 from params  import params                  # 配置
-from model   import GRUOnlyModel           # 模型
+from model   import create_model           # 模型
 warnings.filterwarnings("ignore")
 
 
@@ -68,7 +68,7 @@ def main():
     # ---------- device & model ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    base_model = GRUOnlyModel(params.gru_config).eval()
+    base_model = create_model(params).eval()
     if torch.cuda.device_count() > 1 and torch.cuda.is_available():
         print(f"[Info] Detected {torch.cuda.device_count()} GPUs ➜ DataParallel enabled")
         base_model = torch.nn.DataParallel(base_model)

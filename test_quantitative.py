@@ -14,7 +14,7 @@ sys.path.append('.')
 
 from params import params
 from dataset import load_data, split_time_series_data, StockDataset
-from model import GRUOnlyModel
+from model import create_model
 from torch.utils.data import DataLoader
 
 def test_data_loading():
@@ -93,7 +93,7 @@ def test_model():
         print(f"使用设备: {device}")
         
         # 创建模型
-        model = GRUOnlyModel(params.gru_config).to(device)
+        model = create_model(params).to(device)
         print(f"✓ 模型创建成功")
         
         # 统计参数
@@ -127,7 +127,7 @@ def test_training_step():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 创建模型和优化器
-        model = GRUOnlyModel(params.gru_config).to(device)
+        model = create_model(params).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=1e-4)
         criterion = torch.nn.SmoothL1Loss(beta=0.5)
         
@@ -176,7 +176,7 @@ def test_learner():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 创建模型和优化器
-        model = GRUOnlyModel(params.gru_config).to(device)
+        model = create_model(params).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=1e-4)
         
         # 创建小数据集

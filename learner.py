@@ -19,7 +19,7 @@ import time
 import matplotlib.pyplot as plt
 
 from dataset import from_train_list, load_data, split_time_series_data, StockDataset
-from model import GRUOnlyModel
+from model import create_model
 from params import params
 from metrics import calculate_metrics_for_train, compute_class_losses, Metrics_batch, Recorder
 
@@ -639,7 +639,7 @@ def train_distributed_torchrun(replica_id, args, params):
   torch.cuda.set_device(device)
   
   # 初始化模型
-  model = GRUOnlyModel(params.gru_config).to(device)
+  model = create_model(params).to(device)
   
   # 初始化DDP
   model = DistributedDataParallel(
@@ -665,7 +665,7 @@ def test_learner_training_step():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 创建模型和优化器
-        model = GRUOnlyModel(params.gru_config).to(device)
+        model = create_model(params).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=1e-4)
         
         # 创建小数据集
@@ -721,7 +721,7 @@ def test_learner_evaluation():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 创建模型
-        model = GRUOnlyModel(params.gru_config).to(device)
+        model = create_model(params).to(device)
         
         # 创建小数据集
         X, y, time_stamps = load_data()
@@ -767,7 +767,7 @@ def test_learner_metrics():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 创建模型和优化器
-        model = GRUOnlyModel(params.gru_config).to(device)
+        model = create_model(params).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=1e-4)
         
         # 创建小数据集
@@ -846,7 +846,7 @@ if __name__=='__main__':
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=0)
     dev_loader = DataLoader(dev_dataset, batch_size=16, shuffle=False, num_workers=0)
     
-    model = GRUOnlyModel(params.gru_config)
+    model = create_model(params)
     opt = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=1e-4)
     learner = Learner('./test_output', model, train_loader, None, opt, params, dev_dataset=dev_loader)
 

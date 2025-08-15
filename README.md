@@ -1,218 +1,270 @@
 # 量化分析系统
 
-这是一个基于GRU的量化分析系统，用于处理时序数据并进行回归预测。
+基于深度学习的量化分析系统，支持多种模型架构进行时序回归预测。
 
 ## 系统概述
 
-本系统专门用于量化分析，实现了：
+本系统专门用于量化分析，支持两种主要的模型架构：
 
-- **数据处理**: 加载和处理量化特征数据
-- **模型架构**: 基于GRU的时序回归模型
-- **训练框架**: 支持多GPU训练和分布式训练
-- **评估指标**: RMSE、R2、Pearson相关系数等回归指标
+1. **GRU模型** - 轻量级时序模型，适合快速实验
+2. **GraphTransformer模型** - 高级图神经网络模型，具有更强的表达能力
+
+### 主要特性
+
+- 🚀 **多模型支持**: 支持GRU和GraphTransformer两种模型架构
+- 📊 **回归预测**: 专门用于量化回归任务
+- 🎯 **图结构建模**: GraphTransformer模型能够建模指标间的复杂关系
+- ⚡ **高效训练**: 支持多GPU训练和分布式训练
+- 🧪 **完整测试**: 每个组件都有独立的测试功能
+- 📈 **丰富指标**: 支持RMSE、R²、Pearson相关系数等多种评估指标
+
+## 模型架构
+
+### GRU模型
+- **输入**: `[B, 15, 12, 8]` - 批次大小 × 时间步 × 节点数 × 特征维度
+- **处理**: 将每个时间步的12×8特征展平为96维，送入GRU
+- **输出**: `[B, 1]` - 回归预测值
+- **参数量**: 约1-2M参数
+
+### GraphTransformer模型
+- **图编码器**: 使用多头自注意力机制建模12个指标节点间的关系
+- **时序模块**: GRU处理图表示的时间序列
+- **可学习边偏置**: 自动学习指标间的相关性
+- **CLS汇聚**: 使用CLS token汇聚图信息
+- **参数量**: 约20-30M参数（可配置）
 
 ## 文件结构
 
 ```
-├── params.py              # 配置文件
+├── params.py              # 配置文件（包含模型选择）
 ├── dataset.py             # 数据集加载和处理
-├── model.py               # GRU模型定义
+├── model.py               # 模型定义（GRU + GraphTransformer）
 ├── learner.py             # 训练逻辑
 ├── metrics.py             # 评估指标
 ├── train.py               # 训练入口
 ├── inference.py           # 推理脚本
-├── test_quantitative.py   # 系统测试脚本
+├── test_quantitative.py   # 综合测试脚本
+├── test_graph_transformer.py  # GraphTransformer专用测试
+├── run_tests.py           # 测试运行器
 ├── train.sh               # 多GPU训练脚本
 ├── run_single.sh          # 单GPU训练脚本
-└── infer.sh               # 推理脚本
+├── infer.sh               # 推理脚本
+├── README.md              # 项目说明文档
+├── requirements.txt       # 依赖文件
+└── CHANGELOG.md           # 变更日志
 ```
 
 ## 配置说明
 
-### params.py 主要配置
+### 模型选择配置
+
+在 `params.py` 中设置模型类型：
 
 ```python
-# 数据路径配置
-params.feat_dir = "/path/to/feature/data"
-params.label_path = "/path/to/label/data"
+# 模型选择配置
+params.model_type = "graph_transformer"  # "gru" 或 "graph_transformer"
 
-# 训练参数
-params.batch_size = 2048
-params.epochs = 50
-params.learning_rate = 1e-3
-
-# 数据维度配置
-params.time_steps = 15      # 时间步数
-params.num_nodes = 12       # 节点数
-params.num_samples = 8      # 样本数
-params.flat_dim = 96        # 展平后的特征维度
-
-# 模型配置
+# GRU模型配置
 params.gru_config = {
-    "input_dim": 96,        # 输入维度
-    "hidden_dim": 256,      # 隐藏层维度
-    "num_layers": 2,        # GRU层数
-    "dropout": 0.05,        # Dropout率
-    "fc_dims": [64],        # 全连接层维度
-    "pooling": "tail_mean", # 池化方式
-    "tail_k": 8,           # 尾部平均的k值
+    "input_dim": 96,
+    "hidden_dim": 256,
+    "num_layers": 2,
+    "dropout": 0.05,
+    "fc_dims": [64],
+    "use_batch_norm": False,
+    "bidirectional": False,
+    "pooling": "tail_mean",
+    "tail_k": 8,
+}
+
+# GraphTransformer模型配置
+params.graph_transformer_config = {
+    "graph_cfg": {
+        "num_nodes": 12,
+        "in_dim": 8,
+        "d_model": 512,     # 图表示维度
+        "n_heads": 8,
+        "n_layers": 8,      # 8层图Transformer
+        "dropout": 0.10,
+        "ff_mult": 4,
+        "use_node_type_embed": True,
+        "prior_matrix": None,     # 可传入相关性先验
+        "prior_strength": 0.2,
+    },
+    "temporal_cfg": {
+        "input_dim": 512,  # 自动接管
+        "hidden_dim": 256,
+        "num_layers": 2,
+        "dropout": 0.05,
+        "fc_dims": [128, 64],
+        "use_batch_norm": False,
+        "bidirectional": False,
+        "pooling": "tail_mean",
+        "tail_k": 8
+    }
 }
 ```
 
+### 大模型配置
+
+对于需要更强表达能力的场景，可以使用大模型配置：
+
+```python
+params.graph_transformer_config = params.graph_transformer_large_config
+```
+
+大模型配置包含：
+- 更大的隐藏维度（640）
+- 更多的注意力头（10）
+- 更多的层数（10层）
+- 约30M参数
+
 ## 使用方法
 
-### 1. 环境准备
-
-确保安装了所需的依赖包：
+### 快速测试
 
 ```bash
-pip install torch torchvision
-pip install numpy pandas scikit-learn scipy
-pip install matplotlib tqdm
-```
+# 运行所有测试
+python run_tests.py
 
-### 2. 数据准备
-
-确保数据路径配置正确：
-
-- 特征数据路径：`params.feat_dir`
-- 标签数据路径：`params.label_path`
-
-数据格式：
-- 特征数据：pickle格式，包含时序特征
-- 标签数据：pickle格式，包含回归标签
-
-### 3. 系统测试
-
-运行测试脚本验证系统是否正常工作：
-
-```bash
+# 运行单个组件测试
+python dataset.py
+python model.py
+python learner.py
 python test_quantitative.py
+
+# 专门测试GraphTransformer模型
+python test_graph_transformer.py
 ```
 
-### 4. 训练模型
-
-#### 单GPU训练
+### 训练模型
 
 ```bash
+# 单GPU训练
 bash run_single.sh
-```
 
-#### 多GPU训练
-
-```bash
+# 多GPU训练
 bash train.sh
 ```
 
-#### 自定义训练
-
-```bash
-python train.py ./output_dir ./data/dummy.txt ./data/dummy
-```
-
-### 5. 模型推理
+### 模型推理
 
 ```bash
 bash infer.sh path/to/model_checkpoint.pt
 ```
 
-或者直接使用Python脚本：
+## 模型切换
 
-```bash
-python inference.py \
-    --model_path path/to/model_checkpoint.pt \
-    --batch_size 512 \
-    --output_file results.csv
+### 使用GRU模型
+
+```python
+# 在params.py中设置
+params.model_type = "gru"
 ```
 
-## 模型架构
+### 使用GraphTransformer模型
 
-### GRUOnlyModel
+```python
+# 在params.py中设置
+params.model_type = "graph_transformer"
+```
 
-主要组件：
-- **TemporalModule**: GRU时序模块 + 全连接层
-- **线性跳跃连接**: 直接连接输入和输出的线性层
-- **池化策略**: 支持mean、max、last、tail_mean等
+### 使用大模型
 
-输入格式：`[batch_size, time_steps, num_nodes, num_samples]`
-输出格式：`[batch_size, 1]`
+```python
+# 在params.py中设置
+params.model_type = "graph_transformer"
+params.graph_transformer_config = params.graph_transformer_large_config
+```
 
-### 数据处理流程
+## 技术细节
 
-1. **数据加载**: 从pickle文件加载特征和标签
-2. **数据分割**: 按时间分割为训练/验证/测试集
-3. **数据预处理**: 特征展平和标准化
-4. **批次处理**: 创建DataLoader进行批次训练
+### GraphTransformer架构
 
-## 评估指标
+1. **图编码器**:
+   - 节点特征投影: `[B*T, 12, 8]` → `[B*T, 12, D]`
+   - 节点类型嵌入: 为每个指标节点添加可学习的嵌入
+   - 可学习边偏置: 每个注意力头一个12×12的偏置矩阵
+   - CLS token: 用于汇聚图信息
+   - 多层Transformer: 8层自注意力机制
 
-系统使用以下回归指标：
+2. **时序模块**:
+   - GRU处理: `[B, 15, D]` → `[B, H]`
+   - 池化策略: tail_mean（取最后k天平均）
+   - Skip连接: 原始特征的线性组合
+   - 回归头: 多层感知机输出预测值
+
+### 训练策略
+
+- **损失函数**: SmoothL1Loss (Huber Loss)
+- **优化器**: AdamW with weight decay
+- **学习率调度**: OneCycleLR
+- **混合精度**: 自动混合精度训练
+- **梯度裁剪**: 防止梯度爆炸
+
+### 评估指标
 
 - **RMSE**: 均方根误差
 - **R²**: 决定系数
 - **Pearson**: 皮尔逊相关系数
-- **Accuracy**: 基于相对误差的准确率（10%阈值）
+- **相对误差**: 自定义准确率指标
 
-## 训练监控
+## 性能对比
 
-训练过程中会记录：
-
-- 训练损失
-- 验证指标
-- 学习曲线
-- 模型检查点
-
-可以通过TensorBoard查看训练过程：
-
-```bash
-tensorboard --logdir ./exports_quantitative
-```
-
-## 注意事项
-
-1. **数据路径**: 确保在`params.py`中正确配置数据路径
-2. **GPU内存**: 根据GPU内存调整batch_size
-3. **数据格式**: 确保数据格式符合预期
-4. **依赖版本**: 确保PyTorch版本兼容
+| 模型 | 参数量 | 训练速度 | 表达能力 | 适用场景 |
+|------|--------|----------|----------|----------|
+| GRU | ~1-2M | 快 | 中等 | 快速实验、资源受限 |
+| GraphTransformer | ~20-30M | 中等 | 强 | 生产环境、高精度需求 |
+| GraphTransformer-Large | ~30M+ | 慢 | 最强 | 研究、最高精度需求 |
 
 ## 故障排除
 
 ### 常见问题
 
-1. **数据加载失败**
-   - 检查数据路径是否正确
-   - 确认数据文件格式
-
-2. **内存不足**
+1. **内存不足**:
    - 减小batch_size
-   - 减少num_workers
+   - 使用GRU模型替代GraphTransformer
+   - 启用梯度累积
 
-3. **模型训练不收敛**
-   - 调整学习率
+2. **训练速度慢**:
+   - 使用多GPU训练
+   - 启用混合精度训练
+   - 调整数据加载器worker数量
+
+3. **模型不收敛**:
+   - 检查学习率设置
+   - 调整dropout率
    - 检查数据预处理
-   - 调整模型配置
 
-### 调试建议
+### 调试技巧
 
-1. 先运行测试脚本验证系统
-2. 使用小数据集进行快速测试
-3. 检查日志输出和错误信息
-4. 验证数据格式和维度
+1. **启用测试模式**:
+   ```python
+   params.test_mode = True
+   ```
 
-## 扩展功能
+2. **检查模型参数**:
+   ```python
+   python model.py
+   ```
 
-可以根据需要扩展以下功能：
+3. **验证数据加载**:
+   ```python
+   python dataset.py
+   ```
 
-- 添加更多模型架构
-- 实现数据增强
-- 添加更多评估指标
-- 支持更多数据格式
-- 实现模型集成
+## 贡献指南
 
-## 联系信息
+1. Fork项目
+2. 创建功能分支
+3. 提交更改
+4. 推送到分支
+5. 创建Pull Request
 
-如有问题，请检查：
-1. 数据路径配置
-2. 依赖包版本
-3. 系统日志输出
-4. 测试脚本结果
+## 许可证
+
+本项目采用MIT许可证。
+
+## 更新日志
+
+详见 [CHANGELOG.md](CHANGELOG.md)
