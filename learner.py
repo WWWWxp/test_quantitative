@@ -227,7 +227,7 @@ class Learner:
         'epoch': getattr(self, 'current_epoch', 0),
         'model': { k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in model_state.items() },
         'optimizer': { k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in self.optimizer.state_dict().items() },
-        'params': dict(self.params),
+        'params': vars(self.params),
         'scaler': self.scaler.state_dict(),
     }
 
@@ -503,7 +503,11 @@ class Learner:
 
     # 量化数据格式：X和y
     X, y = features
-    device = X.device
+    
+    # 确保数据在正确的设备上
+    device = next(self.model.parameters()).device
+    X = X.to(device)
+    y = y.to(device)
     
     with self.autocast:
       output = self.model(X)
@@ -627,28 +631,57 @@ def _train_impl(replica_id, model, dataset, dataset_unsupervised, args, params, 
   learner.train(max_steps=max_steps)
 
 def train_distributed_torchrun(replica_id, args, params):
-  dataset = from_train_list(args.train_list[0], args.audio_root, params, is_distributed=True)
-  
-  # 创建dev数据集
-  dev_dataset = None
-  if hasattr(args, 'dev_list') and args.dev_list:
-    dev_dataset = from_train_list(args.dev_list, args.audio_root, params, is_distributed=False)
-  
-  # 自动获取全局设备信息
-  device = torch.device('cuda', replica_id)
-  torch.cuda.set_device(device)
-  
-  # 初始化模型
-  model = create_model(params).to(device)
-  
-  # 初始化DDP
-  model = DistributedDataParallel(
-    model,
-    device_ids=[replica_id],
-    output_device=replica_id,
-    find_unused_parameters=True  # 根据实际情况调整
-  )
-  _train_impl(replica_id, model, dataset, None, args, params, dev_dataset=dev_dataset)
+    """分布式训练函数 - 使用新的数据加载方式"""
+    # 加载量化数据
+    X, y, time_stamps = load_data()
+    (X_train, X_val, X_test), (y_train, y_val, y_test), (ts_train, ts_val, ts_test) = split_time_series_data(X, y, time_stamps)
+    
+    # 创建训练数据集和DataLoader
+    train_dataset_raw = StockDataset(X_train, y_train)
+    from torch.utils.data import DataLoader
+    from torch.utils.data.distributed import DistributedSampler
+    
+    # 创建分布式采样器
+    train_sampler = DistributedSampler(train_dataset_raw) if torch.distributed.is_initialized() else None
+    
+    train_dataset = DataLoader(
+        train_dataset_raw,
+        batch_size=params.batch_size,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        pin_memory=True,
+        num_workers=min(8, params.num_workers),
+        drop_last=True
+    )
+    
+    # 创建验证数据集
+    dev_dataset = None
+    if len(X_val) > 0:
+        dev_dataset_raw = StockDataset(X_val, y_val)
+        dev_dataset = DataLoader(
+            dev_dataset_raw,
+            batch_size=params.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            num_workers=min(4, params.num_workers//2),
+            drop_last=False
+        )
+    
+    # 自动获取全局设备信息
+    device = torch.device('cuda', replica_id)
+    torch.cuda.set_device(device)
+    
+    # 初始化模型
+    model = create_model(params).to(device)
+    
+    # 初始化DDP
+    model = DistributedDataParallel(
+        model,
+        device_ids=[replica_id],
+        output_device=replica_id,
+        find_unused_parameters=True  # 根据实际情况调整
+    )
+    _train_impl(replica_id, model, train_dataset, None, args, params, dev_dataset=dev_dataset)
 
 def test_learner_training_step():
     """测试Learner的训练步骤"""

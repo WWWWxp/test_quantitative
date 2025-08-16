@@ -8,11 +8,12 @@ from types import SimpleNamespace
 params = SimpleNamespace()
 
 # 数据路径配置
-params.feat_dir = "/home/hxcui/mnt/nas_q/projects/project_haoxin/feature/df_feature_13_window124_std15_20"
-params.label_path = "/home/hxcui/mnt/nas_q/projects/project_haoxin/label/df_label_5d.pkl"
+# 新增CSV数据路径配置
+params.feat_path = "./test_feat.csv"  # 特征数据CSV文件路径
+params.label_csv_path = "./test_label.csv"  # 标签数据CSV文件路径
 
 # 训练参数
-params.batch_size = 2048
+params.batch_size = 64
 params.epochs = 50
 params.learning_rate = 1e-3
 params.patience = 10
@@ -20,7 +21,7 @@ params.num_workers = 8
 params.max_grad_norm = 1.0
 
 # 输出配置
-params.output_root = "/home/hxcui/mnt/nas_q/projects/project_haoxin/output/gru_only_baseline"
+params.output_root = "./project_haoxin/output/gru_only_baseline"
 
 # 数据维度配置
 params.time_steps = 15
@@ -111,4 +112,4 @@ params.time_window = "day"
 params.n_experiments = 5
 
 # 测试模式配置
-params.test_mode = False  # 是否启用测试模式
+params.test_mode = True  # 是否启用测试模式

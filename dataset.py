@@ -55,84 +55,184 @@ def load_data():
         return create_test_data()
     
     logger.info("开始加载标签数据")
-    with open(params.label_path, "rb") as f:
-        df_label = pickle.load(f).fillna(0)
-    df_label.index = df_label.index.set_levels(
-        df_label.index.levels[0].strftime("%Y-%m-%d"), level=0
-    )
     
-    X_list, y_list, time_stamps_list = [], [], []
-    years_list = sorted([f for f in os.listdir(params.feat_dir) if f.endswith(".pickle")])[:10]
-
-    for fname in tqdm(years_list, desc="读取特征数据"):
-        df_feat = pd.read_pickle(os.path.join(params.feat_dir, fname)).fillna(0)
-        df_feat = df_feat.loc[:, ~df_feat.columns.str.contains('ElapsedTime', case=False)]
-        df_feat = df_feat.loc[:, ~df_feat.columns.str.contains('_12[0-3]', case=False)]
-        df_feat = df_feat.clip(upper=100)
-        df_feat.index = df_feat.index.set_levels(
-            pd.to_datetime(df_feat.index.levels[0]).strftime("%Y-%m-%d"), level=0
-        )
-        common_idx = df_feat.index.intersection(df_label.index)
-        logger.info(f"处理文件: {fname}, 有效样本数: {len(common_idx)}, 丢失labels数: {len(df_feat) - len(common_idx)}")
-
-        arr = df_feat.loc[common_idx].values
-        expected_dim = params.time_steps * params.num_nodes * params.num_samples
-        assert arr.shape[1] == expected_dim, f"特征维度不匹配: {arr.shape[1]} != {expected_dim}"
-
-        X_part = arr.reshape(-1, params.time_steps, params.num_nodes, params.num_samples)  # [*, 15, 12, 8]
-        y_part = df_label.loc[common_idx, 'label_5d'].values
-        time_stamps_part = [idx[0] for idx in common_idx]
-
-        X_list.append(X_part)
-        y_list.append(y_part)
-        time_stamps_list.extend(time_stamps_part)
-
-    X = np.vstack(X_list)
-    y = np.concatenate(y_list)
+    # 加载标签数据
+    label_df = pd.read_csv(params.label_csv_path)
+    label_df['datetime'] = pd.to_datetime(label_df['datetime'])
+    
+    # 处理股票代码，移除b'前缀和'后缀
+    label_df['instrument'] = label_df['instrument'].str.replace("b'", "").str.replace("'", "")
+    
+    logger.info(f"标签数据加载完成，形状: {label_df.shape}")
+    logger.info(f"时间范围: {label_df['datetime'].min()} 至 {label_df['datetime'].max()}")
+    logger.info(f"股票数量: {label_df['instrument'].nunique()}")
+    
+    # 加载特征数据
+    logger.info("开始加载特征数据")
+    
+    # 读取特征CSV文件
+    feat_df = pd.read_csv(params.feat_path)
+    
+    # 第一列是时间戳，转换为datetime
+    feat_df.iloc[:, 0] = pd.to_datetime(feat_df.iloc[:, 0])
+    
+    # 处理股票代码，移除b'前缀和'后缀
+    feat_df['instrument'] = feat_df['instrument'].str.replace("b'", "").str.replace("'", "")
+    
+    logger.info(f"特征数据加载完成，形状: {feat_df.shape}")
+    logger.info(f"时间范围: {feat_df.iloc[:, 0].min()} 至 {feat_df.iloc[:, 0].max()}")
+    logger.info(f"股票数量: {feat_df['instrument'].nunique()}")
+    
+    # 找到共同的股票代码
+    label_stocks = set(label_df['instrument'].unique())
+    feat_stocks = set(feat_df['instrument'].unique())
+    common_stocks = label_stocks.intersection(feat_stocks)
+    logger.info(f"共同股票数量: {len(common_stocks)}")
+    
+    if len(common_stocks) == 0:
+        raise ValueError("标签数据和特征数据没有共同的股票代码")
+    
+    # 筛选共同股票的数据
+    label_filtered = label_df[label_df['instrument'].isin(common_stocks)].copy()
+    feat_filtered = feat_df[feat_df['instrument'].isin(common_stocks)].copy()
+    
+    # 处理特征数据，移除异常值
+    feat_numeric = feat_filtered.select_dtypes(include=[np.number])
+    feat_numeric = feat_numeric.clip(upper=100)  # 限制上限
+    feat_numeric = feat_numeric.fillna(0)
+    
+    # 选择前num_stocks个股票
+    num_stocks = min(len(common_stocks), params.num_nodes)
+    selected_stocks = list(common_stocks)[:num_stocks]
+    
+    # 获取唯一的时间戳
+    label_dates = label_filtered['datetime'].unique()
+    feat_dates = feat_filtered.iloc[:, 0].unique()
+    
+    logger.info(f"标签数据时间点: {len(label_dates)}")
+    logger.info(f"特征数据时间点: {len(feat_dates)}")
+    
+    # 初始化结果数组
+    time_steps = min(len(label_dates), params.time_steps)
+    X_list = []
+    y_list = []
+    time_stamps_list = []
+    
+    # 按时间组织数据
+    for i, date in enumerate(label_dates[:time_steps]):
+        # 获取当前时间点的标签数据
+        current_label = label_filtered[label_filtered['datetime'] == date]
+        
+        # 为每个股票创建特征向量和标签
+        stock_features = []
+        stock_labels = []
+        
+        for stock in selected_stocks:
+            # 获取该股票的标签
+            stock_label_data = current_label[current_label['instrument'] == stock]
+            if len(stock_label_data) > 0:
+                stock_label = stock_label_data['label_5d'].iloc[0]
+            else:
+                stock_label = 0.0
+            
+            # 获取该股票的特征（如果存在）
+            stock_feat_data = feat_filtered[feat_filtered['instrument'] == stock]
+            if len(stock_feat_data) > 0:
+                # 获取数值特征
+                stock_feat = stock_feat_data.select_dtypes(include=[np.number]).iloc[0].values
+            else:
+                # 如果特征不存在，使用零填充
+                stock_feat = np.zeros(feat_numeric.shape[1])
+            
+            # 确保特征数量正确
+            if len(stock_feat) < params.num_samples:
+                # 如果特征不够，用零填充
+                padded_feat = np.zeros(params.num_samples)
+                padded_feat[:len(stock_feat)] = stock_feat
+                stock_feat = padded_feat
+            elif len(stock_feat) > params.num_samples:
+                # 如果特征太多，截取前num_samples个
+                stock_feat = stock_feat[:params.num_samples]
+            
+            stock_features.append(stock_feat)
+            stock_labels.append(stock_label)
+        
+        # 确保股票数量正确
+        while len(stock_features) < params.num_nodes:
+            stock_features.append(np.zeros(params.num_samples))
+            stock_labels.append(0.0)
+        
+        # 转换为numpy数组
+        X_time = np.array(stock_features[:params.num_nodes], dtype=np.float32)
+        y_time = np.array(stock_labels[:params.num_nodes], dtype=np.float32)
+        
+        X_list.append(X_time)
+        y_list.append(y_time)
+        time_stamps_list.append(date.strftime('%Y-%m-%d'))
+    
+    # 转换为最终格式
+    X = np.array(X_list)  # [time_steps, num_nodes, num_samples]
+    y = np.array(y_list)  # [time_steps, num_nodes]
     time_stamps = np.array(time_stamps_list)
     
-    order = np.argsort(time_stamps.astype('datetime64[D]'))
-    X, y, time_stamps = X[order], y[order], time_stamps[order]
-
-    logger.info(f"数据加载完成，总样本数: {len(X)}, 形状: {X.shape}")
-    logger.info(f"时间范围（全体数据）: {time_stamps[0]} 至 {time_stamps[-1]}")
-    return X, y, time_stamps
-
-def split_time_series_data(X, y, time_stamps):
-    """按时间分割数据"""
-    # 检查是否为测试模式
-    if getattr(params, 'test_mode', False):
-        # 测试模式：简单分割
-        total_samples = len(X)
-        train_end = int(total_samples * 0.7)
-        val_end = int(total_samples * 0.85)
+    # 重新组织为 [samples, time_steps, num_nodes, num_samples] 格式
+    # 这里需要创建滑动窗口，每个样本包含完整的时间序列
+    if len(X) < params.time_steps:
+        # 如果数据不够，直接使用现有数据并填充
+        X_final = np.zeros((1, params.time_steps, params.num_nodes, params.num_samples))
+        y_final = np.zeros(1)  # 改为1维
+        X_final[0, :len(X), :, :] = X
+        y_final[0] = y[-1, 0] if len(y) > 0 else 0.0  # 使用最后一个时间点的第一个股票标签
+        time_stamps_final = np.array([time_stamps[-1] if len(time_stamps) > 0 else "2020-01-01"])
+    else:
+        # 创建滑动窗口样本
+        num_samples = len(X) - params.time_steps + 1
+        X_final = np.zeros((num_samples, params.time_steps, params.num_nodes, params.num_samples))
+        y_final = np.zeros(num_samples)  # 改为1维
+        time_stamps_final = []
         
-        X_train, y_train, ts_train = X[:train_end], y[:train_end], time_stamps[:train_end]
-        X_val, y_val, ts_val = X[train_end:val_end], y[train_end:val_end], time_stamps[train_end:val_end]
-        X_test, y_test, ts_test = X[val_end:], y[val_end:], time_stamps[val_end:]
+        for i in range(num_samples):
+            X_final[i] = X[i:i+params.time_steps]  # [time_steps, num_nodes, num_samples]
+            y_final[i] = y[i+params.time_steps-1, 0]  # 使用窗口最后一天的第一个股票标签
+            time_stamps_final.append(time_stamps[i+params.time_steps-1])
         
-        print(f"测试模式数据分割: 训练集={len(X_train)}, 验证集={len(X_val)}, 测试集={len(X_test)}")
-        return (X_train, X_val, X_test), (y_train, y_val, y_test), (ts_train, ts_val, ts_test)
+        time_stamps_final = np.array(time_stamps_final)
     
-    ts = pd.to_datetime(time_stamps)
-    years = ts.year
-    train_idx = np.where((years >= 2011) & (years <= 2018))[0]
-    val_idx = np.where(years == 2019)[0]
-    test_idx = np.where(years == 2020)[0]
+    logger.info(f"数据加载完成，最终形状: X={X_final.shape}, y={y_final.shape}")
+    logger.info(f"时间范围: {time_stamps_final[0]} 至 {time_stamps_final[-1]}")
     
-    X_train, y_train, ts_train = X[train_idx], y[train_idx], time_stamps[train_idx]
-    X_val, y_val, ts_val = X[val_idx], y[val_idx], time_stamps[val_idx]
-    X_test, y_test, ts_test = X[test_idx], y[test_idx], time_stamps[test_idx]
+    return X_final, y_final, time_stamps_final
+
+def split_time_series_data(X, y, time_stamps, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15):
+    """
+    分割时间序列数据为训练、验证和测试集
     
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info("\n===== 数据集日期范围 =====")
-    if len(ts_train): 
-        logger.info(f"训练集: {ts_train.min()} 至 {ts_train.max()}（样本数: {len(ts_train)}）")
-    if len(ts_val):   
-        logger.info(f"验证集: {ts_val.min()} 至 {ts_val.max()}（样本数: {len(ts_val)}）")
-    if len(ts_test):  
-        logger.info(f"测试集: {ts_test.min()} 至 {ts_test.max()}（样本数: {len(ts_test)}）")
+    Args:
+        X: 特征数据 [samples, time_steps, num_nodes, num_samples]
+        y: 标签数据 [samples, 1]
+        time_stamps: 时间戳数组
+        train_ratio: 训练集比例
+        val_ratio: 验证集比例
+        test_ratio: 测试集比例
+    
+    Returns:
+        (X_train, X_val, X_test), (y_train, y_val, y_test), (ts_train, ts_val, ts_test)
+    """
+    total_samples = len(X)
+    
+    # 如果样本数量太少，使用简单的分割
+    if total_samples <= 3:
+        # 对于很少的样本，全部用于训练
+        return (X, X[:1], X[:1]), (y, y[:1], y[:1]), (time_stamps, time_stamps[:1], time_stamps[:1])
+    
+    # 计算分割点
+    train_end = int(total_samples * train_ratio)
+    val_end = train_end + int(total_samples * val_ratio)
+    
+    # 分割数据
+    X_train, y_train, ts_train = X[:train_end], y[:train_end], time_stamps[:train_end]
+    X_val, y_val, ts_val = X[train_end:val_end], y[train_end:val_end], time_stamps[train_end:val_end]
+    X_test, y_test, ts_test = X[val_end:], y[val_end:], time_stamps[val_end:]
     
     return (X_train, X_val, X_test), (y_train, y_val, y_test), (ts_train, ts_val, ts_test)
 

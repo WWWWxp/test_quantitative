@@ -63,7 +63,12 @@ class GRUOnlyModel(nn.Module):
         super().__init__()
         self.temporal = TemporalModule(config)
 
-    def forward(self, x):  # x: [B, 15, 12, 8]
+    def forward(self, x):  # x: [B, 15, 12, 8] or [B, 12, 8]
+        # Handle both 3D and 4D input
+        if x.dim() == 3:
+            # Input is [B, N, F], expand to [B, 1, N, F]
+            x = x.unsqueeze(1)
+        
         B, T, N, F = x.shape
         x = x.view(B, T, N * F).contiguous()   # [B, T, 96]
         return self.temporal(x)
@@ -148,6 +153,7 @@ class GraphEncoder(nn.Module):
     """
     def __init__(
         self,
+        config=None,
         num_nodes: int = 12,
         in_dim: int = 8,
         d_model: int = 512,
@@ -160,6 +166,18 @@ class GraphEncoder(nn.Module):
         prior_strength: float = 0.2,                  # 先验强度（会作为可学习缩放的初值）
     ):
         super().__init__()
+        
+        # 处理SimpleNamespace对象
+        if config is not None:
+            num_nodes = getattr(config, 'num_nodes', num_nodes)
+            in_dim = getattr(config, 'in_dim', in_dim)
+            d_model = getattr(config, 'd_model', d_model)
+            n_heads = getattr(config, 'n_heads', n_heads)
+            n_layers = getattr(config, 'n_layers', n_layers)
+            dropout = getattr(config, 'dropout', dropout)
+            ff_mult = getattr(config, 'ff_mult', ff_mult)
+            use_node_type_embed = getattr(config, 'use_node_type_embed', use_node_type_embed)
+        
         self.N = num_nodes
         self.D = d_model
         self.use_node_type_embed = use_node_type_embed
@@ -259,33 +277,48 @@ class GraphEncoder(nn.Module):
         return graph_repr  # [BT, D]
 
 class TemporalGRUHead(nn.Module):
-    def __init__(self, config: dict):
+    def __init__(self, config):
         super().__init__()
         self.config = config
+        
+        # 处理SimpleNamespace对象
+        input_dim = getattr(config, 'input_dim', 64)
+        hidden_dim = getattr(config, 'hidden_dim', 128)
+        num_layers = getattr(config, 'num_layers', 2)
+        dropout = getattr(config, 'dropout', 0.1)
+        bidirectional = getattr(config, 'bidirectional', False)
+        use_batch_norm = getattr(config, 'use_batch_norm', False)
+        fc_dims = getattr(config, 'fc_dims', [64])
+        pooling = getattr(config, 'pooling', 'mean')
+        tail_k = getattr(config, 'tail_k', 8)
+        
         self.gru = nn.GRU(
-            input_size=config["input_dim"],
-            hidden_size=config["hidden_dim"],
-            num_layers=config["num_layers"],
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
             batch_first=True,
-            dropout=config["dropout"] if config["num_layers"] > 1 else 0.0,
-            bidirectional=config["bidirectional"],
+            dropout=dropout if num_layers > 1 else 0.0,
+            bidirectional=bidirectional,
         )
-        self.gru_out_dim = config["hidden_dim"] * (2 if config["bidirectional"] else 1)
-        self.bn = nn.BatchNorm1d(self.gru_out_dim) if config.get("use_batch_norm", False) else None
+        self.gru_out_dim = hidden_dim * (2 if bidirectional else 1)
+        self.bn = nn.BatchNorm1d(self.gru_out_dim) if use_batch_norm else None
 
         # FC head
-        dims = [self.gru_out_dim] + list(config["fc_dims"]) + [1]
+        dims = [self.gru_out_dim] + list(fc_dims) + [1]
         fcs = []
         for i in range(len(dims) - 2):
-            fcs += [nn.Linear(dims[i], dims[i+1]), nn.ReLU(), nn.Dropout(config["dropout"])]
+            fcs += [nn.Linear(dims[i], dims[i+1]), nn.ReLU(), nn.Dropout(dropout)]
         fcs += [nn.Linear(dims[-2], dims[-1])]
         self.fc = nn.Sequential(*fcs)
 
         # 原始特征的skip支路（取最后k天的原始"12*8=96维/天"聚合）
-        self.tail_k = config.get("tail_k", 8)
+        self.tail_k = tail_k
         self.linear_skip = nn.Sequential(
             nn.Linear(96, 128), nn.GELU(), nn.Linear(128, 1)
         )
+        
+        # 保存配置
+        self.pooling = pooling
 
     def forward(self, seq_feat: torch.Tensor, raw_last_k_flat: torch.Tensor) -> torch.Tensor:
         """
@@ -293,7 +326,7 @@ class TemporalGRUHead(nn.Module):
         raw_last_k_flat: [B, 96]      # 最近k天原始特征（每天展平96后再平均）
         """
         out, _ = self.gru(seq_feat)   # [B, T, H*dir]
-        p = self.config["pooling"]
+        p = self.pooling
         if p == "mean":
             fused = out.mean(1)
         elif p == "max":
@@ -315,19 +348,42 @@ class TemporalGRUHead(nn.Module):
 
 class StockGraphTemporalModel(nn.Module):
     def __init__(self,
-                 graph_cfg: dict,
-                 temporal_cfg: dict):
+                 graph_cfg,
+                 temporal_cfg):
         super().__init__()
-        self.N = graph_cfg.get("num_nodes", 12)
-        self.C = graph_cfg.get("in_dim", 8)
+        
+        # 处理SimpleNamespace对象
+        if hasattr(graph_cfg, 'num_nodes'):
+            self.N = graph_cfg.num_nodes
+        else:
+            self.N = getattr(graph_cfg, 'num_nodes', 12)
+            
+        if hasattr(graph_cfg, 'in_dim'):
+            self.C = graph_cfg.in_dim
+        else:
+            self.C = getattr(graph_cfg, 'in_dim', 8)
+            
         self.T = 15  # 你的设定（若变长可改为动态、不强制）
 
-        self.graph_encoder = GraphEncoder(**graph_cfg)
+        self.graph_encoder = GraphEncoder(graph_cfg)
 
         # 将图编码输出尺寸接到GRU
-        temporal_cfg = dict(temporal_cfg)
-        temporal_cfg["input_dim"] = graph_cfg["d_model"]
-        self.temporal_head = TemporalGRUHead(temporal_cfg)
+        d_model = getattr(graph_cfg, 'd_model', 512)
+        
+        # 创建temporal配置
+        temporal_config = type('Config', (), {
+            'input_dim': d_model,  # 使用GraphEncoder的输出维度
+            'hidden_dim': getattr(temporal_cfg, 'hidden_dim', 128),
+            'num_layers': getattr(temporal_cfg, 'num_layers', 2),
+            'dropout': getattr(temporal_cfg, 'dropout', 0.1),
+            'bidirectional': getattr(temporal_cfg, 'bidirectional', False),
+            'use_batch_norm': getattr(temporal_cfg, 'use_batch_norm', False),
+            'fc_dims': getattr(temporal_cfg, 'fc_dims', [64]),
+            'pooling': getattr(temporal_cfg, 'pooling', 'mean'),
+            'tail_k': getattr(temporal_cfg, 'tail_k', 5)
+        })()
+            
+        self.temporal_head = TemporalGRUHead(temporal_config)
 
     @staticmethod
     def _flatten_last_k_days(x_raw: torch.Tensor, k: int) -> torch.Tensor:
@@ -339,13 +395,23 @@ class StockGraphTemporalModel(nn.Module):
         k = min(k, T)
         xk = x_raw[:, -k:, :, :]                     # [B, k, N, C]
         xk = xk.reshape(B, k, N * C)                 # [B, k, 96]
-        xk = xk.mean(dim=1)                          # [B, 96]
+        
+        # If we only have 1 time step, don't average over time dimension
+        if k == 1:
+            xk = xk.squeeze(1)                       # [B, 96]
+        else:
+            xk = xk.mean(dim=1)                      # [B, 96]
         return xk
 
     def forward(self, x_raw: torch.Tensor) -> torch.Tensor:
         """
-        x_raw: [B, 15, 12, 8]
+        x_raw: [B, 15, 12, 8] or [B, 12, 8] (will be expanded to 4D)
         """
+        # Handle both 3D and 4D input
+        if x_raw.dim() == 3:
+            # Input is [B, N, C], expand to [B, 1, N, C]
+            x_raw = x_raw.unsqueeze(1)
+        
         B, T, N, C = x_raw.shape
         assert N == self.N and C == self.C
 
@@ -365,13 +431,19 @@ class StockGraphTemporalModel(nn.Module):
 # ---------- 模型工厂函数 ----------
 def create_model(config):
     """创建模型实例"""
-    model_type = config.get("model_type", "gru")
+    # 处理SimpleNamespace对象
+    if hasattr(config, 'model_type'):
+        model_type = config.model_type
+    else:
+        model_type = getattr(config, 'model_type', 'gru')
     
     if model_type == "gru":
-        return GRUOnlyModel(config["gru_config"])
+        gru_config = getattr(config, 'gru_config', config)
+        return GRUOnlyModel(gru_config)
     elif model_type == "graph_transformer":
-        graph_cfg = config["graph_transformer_config"]["graph_cfg"]
-        temporal_cfg = config["graph_transformer_config"]["temporal_cfg"]
+        gt_config = getattr(config, 'graph_transformer_config', {})
+        graph_cfg = gt_config.get('graph_cfg', config)
+        temporal_cfg = gt_config.get('temporal_cfg', config)
         return StockGraphTemporalModel(graph_cfg, temporal_cfg)
     else:
         raise ValueError(f"不支持的模型类型: {model_type}")

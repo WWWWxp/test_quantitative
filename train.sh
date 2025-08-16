@@ -14,4 +14,4 @@ CUDA_LAUNCH_BLOCKING=7 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6 OMP_NUM_THREADS=125 to
     --nproc_per_node=7 \
     --master_addr=$MASTER_ADDR \
     --master_port=$MASTER_PORT \
-    train.py ./exports_quantitative ./data/dummy.txt ./data/dummy
+    train.py ./exports_quantitative 

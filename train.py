@@ -41,9 +41,6 @@ if __name__ == '__main__':
   parser = ArgumentParser(description='train (or resume training) a GRU model for quantitative analysis')
   parser.add_argument('model_dir',
       help='directory in which to store model checkpoints and training logs')
-  parser.add_argument('train_list', nargs='+',
-      help='train list (not used for quantitative data, kept for compatibility)')
-  parser.add_argument('audio_root', help='data root (not used for quantitative data, kept for compatibility)')
   parser.add_argument('--max_steps', default=None, type=int,
       help='maximum number of training steps')
   parser.add_argument('--fp16', action='store_true', default=False,
