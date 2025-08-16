@@ -1,0 +1,51 @@
+# 忽略CSV文件
+*.csv
+
+# 忽略数据文件
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+
+# 忽略模型文件
+*.pth
+*.pt
+*.ckpt
+
+# 忽略输出目录
+output/
+exports*/
+logs/
+checkpoints/
+
+# 忽略临时文件
+*.tmp
+*.temp
+*.log
+
+# 忽略Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# 忽略Jupyter Notebook检查点
+.ipynb_checkpoints/
+
+# 忽略IDE配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略环境配置
+.env
+.venv
+env/
+venv/
